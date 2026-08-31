@@ -50,12 +50,10 @@ int main(void)
         exit(EXIT_FAILURE);
     }
 
-    for(;;)
-    {
+    for(;;) {
         int ConnectFD = accept(SocketFD, NULL, NULL);
 
-        if(0 > ConnectFD)
-        {
+        if(0 > ConnectFD) {
             perror("error accept failed");
             close(SocketFD);
             exit(EXIT_FAILURE);

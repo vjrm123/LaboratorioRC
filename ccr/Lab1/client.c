@@ -55,6 +55,7 @@ int main(void)
     }
 
     while (true) {
+        
 
         cout << "cliente: ";
         getline(cin,os);
