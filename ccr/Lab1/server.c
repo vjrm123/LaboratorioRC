@@ -67,7 +67,7 @@ int main(void)
             n = read(ConnectFD, buffer, 255);
 
             cout << "cliente: " << buffer << endl;
-            cout << "Servidor: ";
+            cout << "servidor: ";
 
             getline(cin,os);
             n = write(ConnectFD, os.c_str(), os.length());

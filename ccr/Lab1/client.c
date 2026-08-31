@@ -1,5 +1,3 @@
-/* Client code */
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -49,9 +47,7 @@ int main(void)
         exit(EXIT_FAILURE);
     }
 
-    if (-1 == connect(SocketFD,
-        (const struct sockaddr *)&stSockAddr,
-        sizeof(struct sockaddr_in)))
+    if (-1 == connect(SocketFD,(const struct sockaddr *)&stSockAddr,sizeof(struct sockaddr_in)))
     {
         perror("connect failed");
         close(SocketFD);
