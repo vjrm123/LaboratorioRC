@@ -24,7 +24,7 @@ void recibirMensajes(int socketFD){
         n = read(socketFD, buffer,255);
 
         if(n <= 0){
-            cout << '\n[!] desconectado' << endl;
+            cout << "\n[!] desconectado" << endl;
             conectado = false;
             break;
         }

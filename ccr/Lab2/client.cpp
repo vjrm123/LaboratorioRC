@@ -8,29 +8,74 @@
 #include <unistd.h>
 #include <iostream>
 #include <string>
-#include<thread>
-#include<atomic>
+#include <thread>
+#include <atomic>
 
 using namespace std;
 
 atomic<bool> conectado(true);
 
-void recibirMensajes(int socketFD){
-    char buffer[256];
+
+void enviarConFormato(int socket, const string& mensaje) {
+    char tipo = 'N';
+    write(socket, &tipo, 1);
+    
+    uint32_t len = htonl(mensaje.length());
+    write(socket, &len, 4);
+    
+    write(socket, mensaje.c_str(), mensaje.length());
+}
+
+string recibirConFormato(int socket) {
+    char buffer[1024];
     int n;
+    
+    bzero(buffer, 1);
+    n = read(socket, buffer, 1);
+    if (n <= 0) return "";
+    char tipo = buffer[0];
+    
+    uint32_t len;
+    n = read(socket, &len, 4);
+    if (n <= 0) return "";
+    len = ntohl(len);
+    
+    if (len > 1023) { 
+        char* mensaje = new char[len + 1];
+        bzero(mensaje, len + 1);
+        n = read(socket, mensaje, len);
+        if (n <= 0) {
+            delete[] mensaje;
+            return "";
+        }
+        mensaje[len] = '\0';
+        string resultado(mensaje);
+        delete[] mensaje;
+        return resultado;
+    } else {
+        bzero(buffer, len + 1);
+        n = read(socket, buffer, len);
+        if (n <= 0) return "";
+        buffer[len] = '\0';
+        return string(buffer);
+    }
+}
 
+
+
+void recibirMensajes(int socketFD) {
     while(conectado) {
-        bzero(buffer,256);
-        n = read(socketFD, buffer,255);
+       
+        string mensaje = recibirConFormato(socketFD);
 
-        if(n <= 0){
-            cout << '\n[!] desconectado' << endl;
+        if (mensaje.empty()) {
+            cout << "\n[!] desconectado" << endl;
             conectado = false;
             break;
         }
 
-        cout << "\ncliente: " << buffer << endl;
-        cout << "cliente: " << flush << endl;
+        cout << "\r \n" << mensaje << endl;  
+        cout << "cliente: " << flush;
     }
 }
 
@@ -39,19 +84,21 @@ void enviarMensajes(int socketFD) {
 
     while(conectado) {
         cout << "cliente: ";
-        getline(cin,os);
+        getline(cin, os);
 
         if(!conectado) break;
         if(os == "salir" || os == "exit") {
-            write(socketFD, os.c_str(), os.length());
+            enviarConFormato(socketFD, os);  
             conectado = false;
             break;
         }
         if(!os.empty()) {
-            write(socketFD, os.c_str(), os.length());
+            enviarConFormato(socketFD, os);  
         }
     }
 }
+
+
 int main(void)
 {
     struct sockaddr_in stSockAddr;

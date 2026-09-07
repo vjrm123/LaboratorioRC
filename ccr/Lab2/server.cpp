@@ -1,4 +1,3 @@
-/* Server code */
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -10,25 +9,79 @@
 #include <unistd.h>
 #include <iostream>
 #include <string>
-#include<thread>
-#include<vector>
-#include<mutex>
+#include <thread>
+#include <vector>
+#include <mutex>
+#include <algorithm>
 
 using namespace std;
 
 vector<int> clients;
 mutex mtxClients;
 
+
+void enviarConFormato(int socket, const string& mensaje) {
+    char tipo = 'N';
+    write(socket, &tipo, 1);
+    
+    uint32_t len = htonl(mensaje.length());
+    write(socket, &len, 4);
+    
+    write(socket, mensaje.c_str(), mensaje.length());
+}
+
+// Recibir mensaje con formato: [TIPO][TAMAÑO 4B][MENSAJE]
+string recibirConFormato(int socket) {
+    char buffer[1024];
+    int n;
+    
+    bzero(buffer, 1);
+    n = read(socket, buffer, 1);
+    if (n <= 0) return "";
+    char tipo = buffer[0];
+
+    uint32_t len;
+    n = read(socket, &len, 4);
+    if (n <= 0) return "";
+    len = ntohl(len);
+    
+    if (len > 1023) {  
+
+        char* mensaje = new char[len + 1];
+        bzero(mensaje, len + 1);
+        n = read(socket, mensaje, len);
+        if (n <= 0) {
+            delete[] mensaje;
+            return "";
+        }
+
+        mensaje[len] = '\0';
+        string resultado(mensaje);
+        delete[] mensaje;
+        return resultado;
+
+    } else {
+
+        bzero(buffer, len + 1);
+        n = read(socket, buffer, len);
+        if (n <= 0) return "";
+        buffer[len] = '\0';
+        return string(buffer);
+
+    }
+}
+
+
 void broadcastMensaje(const string& mensaje, int socketFD) {
     lock_guard<mutex> lock(mtxClients);
     for(int clientFD : clients) {
         if(clientFD != socketFD) {
-            write(clientFD, mensaje.c_str(), mensaje.length());
+            enviarConFormato(clientFD, mensaje);  
         }
     }
 }
 
-void eliminarCliente(int socketFD)  {
+void eliminarCliente(int socketFD) {
     lock_guard<mutex> lock(mtxClients);
     clients.erase(remove(clients.begin(), clients.end(), socketFD), clients.end());
 }
@@ -43,26 +96,20 @@ void manejarCliente(int socketFD) {
     }
 
     string bienvenida = "bienvenido al chat. Escribe 'salir' o 'exit' para desconectarte.";
-    write(socketFD, bienvenida.c_str(), bienvenida.length());
+    enviarConFormato(socketFD, bienvenida);  // CAMBIADO
 
     while(true) {
-        bzero(buffer, 256);
-        n = read(socketFD, buffer, 255);
+        string mensaje = recibirConFormato(socketFD);
 
-        if( n <= 0) {
+        if (mensaje.empty()) {
             cout << "[-] Cliente desconectado. Total clientes: " << clients.size() << endl;
             eliminarCliente(socketFD);
             break;
         }
 
-        string mensaje(buffer);
-
-        mensaje.erase(remove(mensaje.begin(), mensaje.end(), '\n'), mensaje.end());
-        mensaje.erase(remove(mensaje.begin(), mensaje.end(), '\r'), mensaje.end());
-
         if(mensaje == "salir" || mensaje == "exit") {
             string despedida = "desconectado del chat.\n";
-            write(socketFD, despedida.c_str(), despedida.length());
+            enviarConFormato(socketFD, despedida);  // CAMBIADO
             eliminarCliente(socketFD);
             cout << "[-] Cliente desconectado. Total: " << clients.size() << endl;
             break;
@@ -75,8 +122,6 @@ void manejarCliente(int socketFD) {
     shutdown(socketFD, SHUT_RDWR);
     close(socketFD);
 }
-
-
 
 
 int main(void)
