@@ -8,208 +8,200 @@
 #include <string.h>
 #include <unistd.h>
 #include <iostream>
+#include <map>
 #include <string>
 #include <thread>
-#include <vector>
-#include <map>
 #include <mutex>
 #include <algorithm>
 
 using namespace std;
 
-#define TAMANIO_ACCION 1
-#define TAMANIO_NICKNAME 7
-#define TAMANIO_MENSAJE 11
-#define TAMANIO_TOTAL (TAMANIO_ACCION + TAMANIO_NICKNAME + TAMANIO_MENSAJE)
+#define TAMANIO_ACCION   1
+#define TAMANIO_DE_NOMBRE 7
+#define TAMANIO_DE_MSG  11  
 
-struct ClienteInfo {
-    int socket;
-    string nickname;
-};
+map<string, int> ListOfCli;
+mutex mtxLista;
 
-map<string, int> listaDeClientes;
-mutex mtxClientes;
-
-
-void empaquetarMensaje(char* buffer, char accion, const string& nickname, const string& mensaje) {
-    bzero(buffer, TAMANIO_TOTAL);
-    
-    buffer[0] = accion;
-    
-    int nickLen = nickname.length();
-    if (nickLen > TAMANIO_NICKNAME) nickLen = TAMANIO_NICKNAME;
-    strncpy(buffer + 1, nickname.c_str(), nickLen);
-    
-    int msgLen = mensaje.length();
-    if (msgLen > TAMANIO_MENSAJE) msgLen = TAMANIO_MENSAJE;
-    strncpy(buffer + 1 + TAMANIO_NICKNAME, mensaje.c_str(), msgLen);
+string zeroPad(int numero, int tamano) {
+    string str = to_string(numero);
+    if (str.length() >= (size_t)tamano)
+        return str;
+    return string(tamano - str.length(), '0') + str;
 }
 
-void desempaquetarMensaje(const char* buffer, char& accion,string& nickname, string& mensaje) {
-
-    accion = buffer[0];
-    
-    char nick[TAMANIO_NICKNAME + 1] = {0};
-    strncpy(nick, buffer + 1, TAMANIO_NICKNAME);
-    nickname = string(nick);
-
-    nickname.erase(nickname.find_last_not_of(' ') + 1);
-    
-    char msg[TAMANIO_MENSAJE + 1] = {0};
-    strncpy(msg, buffer + 1 + TAMANIO_NICKNAME, TAMANIO_MENSAJE);
-    mensaje = string(msg);
-    mensaje.erase(mensaje.find_last_not_of(' ') + 1);
+string empaquetar(char accion, const string& nick, const string& msg) {
+    string data;
+    data += accion;
+    data += zeroPad(nick.size(), TAMANIO_DE_NOMBRE);
+    data += nick;
+    data += zeroPad(msg.size(), TAMANIO_DE_MSG);
+    data += msg;
+    return data;
 }
 
-void enviarMensaje(int socket, char accion, const string& nickname, const string& mensaje) {
-    char buffer[TAMANIO_TOTAL];
-    empaquetarMensaje(buffer, accion, nickname, mensaje);
-    write(socket, buffer, TAMANIO_TOTAL);
+void enviarMensaje(int S, char accion, const string& nick, const string& msg) {
+    string data = empaquetar(accion, nick, msg);
+    write(S, data.c_str(), data.size());
 }
 
-bool recibirMensaje(int socket, char& accion,string& nickname, string& mensaje) {
-    char buffer[TAMANIO_TOTAL];
-    bzero(buffer, TAMANIO_TOTAL);
-    int n = read(socket, buffer, TAMANIO_TOTAL);
+bool recibirMensaje(int S, char& accion, string& nick, string& msg) {
+    char buff[1000];
+    int n, tamano;
+
+    n = read(S, buff, 1);
     if (n <= 0) return false;
-    desempaquetarMensaje(buffer, accion, nickname, mensaje);
+    accion = buff[0];
+
+    n = read(S, buff, TAMANIO_DE_NOMBRE);
+    if (n <= 0) return false;
+    buff[n] = '\0';
+    tamano = atoi(buff);
+
+    n = read(S, buff, tamano);
+    if (n <= 0) return false;
+    buff[n] = '\0';
+    nick = buff;
+
+    n = read(S, buff, TAMANIO_DE_MSG);
+    if (n <= 0) return false;
+    buff[n] = '\0';
+    tamano = atoi(buff);
+
+    if (tamano > 0) {
+        n = read(S, buff, tamano);
+        if (n <= 0) return false;
+        buff[n] = '\0';
+        msg = buff;
+    } else {
+        msg = "";
+    }
+
     return true;
 }
 
-
-void broadcastMensaje(char accion, const string& nickname, const string& mensaje, int socketFD) {
-    lock_guard<mutex> lock(mtxClientes);
-    for(const auto& cliente : listaDeClientes) {
-        if(cliente.second != socketFD) {
-            enviarMensaje(cliente.second, accion, nickname, mensaje);
+void broadcastMensaje(const string& nick, const string& msg, int emisorSocket) {
+    lock_guard<mutex> lock(mtxLista);
+    for (auto& cliente : ListOfCli) {
+        if (cliente.second != emisorSocket) {
+            enviarMensaje(cliente.second, 'b', nick, msg);
         }
     }
 }
 
-void enviarMensajePrivado(const string& destino, char accion,
-                          const string& nickname, const string& mensaje) {
-    lock_guard<mutex> lock(mtxClientes);
-    auto it = listaDeClientes.find(destino);
-    if (it != listaDeClientes.end()) {
-        enviarMensaje(it->second, accion, nickname, mensaje);
+void enviarPrivado(const string& destino, const string& nick, const string& msg) {
+    lock_guard<mutex> lock(mtxLista);
+    auto it = ListOfCli.find(destino);
+    if (it != ListOfCli.end()) {
+        enviarMensaje(it->second, 'm', nick, msg);
     }
 }
 
-void eliminarCliente(const string& nickname) {
-    lock_guard<mutex> lock(mtxClientes);
-    auto it = listaDeClientes.find(nickname);
-    if (it != listaDeClientes.end()) {
-        close(it->second);
-        listaDeClientes.erase(it);
-    }
+void eliminarCliente(const string& nick) {
+    lock_guard<mutex> lock(mtxLista);
+    ListOfCli.erase(nick);
 }
 
-void manejarCliente(int socketFD) {
+
+void manejarCliente(int S) {
     char accion;
-    string nickname, mensaje;
-    
-    if (!recibirMensaje(socketFD, accion, nickname, mensaje)) {
-        close(socketFD);
+    string nickname, msg;
+
+    if (!recibirMensaje(S, accion, nickname, msg)) {
+        close(S);
         return;
     }
 
     if (accion != 'N') {
-        cout << "[-] Error: Se esperaba registro (N)" << endl;
-        close(socketFD);
+        cout << " Error: se esperaba registro (N)" << endl;
+        close(S);
         return;
     }
-    
+
     {
-        lock_guard<mutex> lock(mtxClientes);
-        listaDeClientes[nickname] = socketFD;
-        cout << "[+] " << nickname << " se ha conectado. Total: " 
-             << listaDeClientes.size() << endl;
+        lock_guard<mutex> lock(mtxLista);
+        ListOfCli[nickname] = S;
+        cout << " " << nickname << " conectado. Total: " << ListOfCli.size() << endl;
     }
-    
-    broadcastMensaje('B', "Sistema", nickname + " se ha unido al chat.", socketFD);
-    
-    while(true) {
-        if (!recibirMensaje(socketFD, accion, nickname, mensaje)) {
+
+    broadcastMensaje("-->", nickname + " se ha unido.", S);
+
+    while (true) {
+        if (!recibirMensaje(S, accion, nickname, msg)) break;
+
+        if (accion == 'M') {
+            if (msg[0] == '@') {
+                size_t pos = msg.find(' ');
+                if (pos != string::npos) {
+                    string destino = msg.substr(1, pos - 1);
+                    string texto = msg.substr(pos + 1);
+                    cout << nickname << " -> @" << destino << ": " << texto << endl;
+                    enviarPrivado(destino, nickname, texto);
+                }
+            }
+        }
+        else if (accion == 'B') {
+            cout << nickname << ": " << msg << endl;
+            broadcastMensaje(nickname, msg, S);
+        }
+        else if (accion == 'Q') {
+            cout << " " << nickname << " desconectado" << endl;
+            eliminarCliente(nickname);
+            broadcastMensaje("Sistema", nickname + " ha salido.", S);
             break;
         }
-        
-        switch(accion) {
-            case 'M':  
-                cout << nickname << ": " << mensaje << endl;
-                broadcastMensaje('M', nickname, mensaje, socketFD);
-                break;
-                
-            case 'Q':  
-                cout << "[-] " << nickname << " se ha desconectado" << endl;
-                eliminarCliente(nickname);
-                broadcastMensaje('B', "Sistema", 
-                                 nickname + " ha salido del chat.", socketFD);
-                close(socketFD);
-                return;
-                
-            case 'B':  
-                cout << "[BROADCAST] " << nickname << ": " << mensaje << endl;
-                broadcastMensaje('B', nickname, mensaje, socketFD);
-                break;
-                
-            default:
-                cout << "[!] Acción desconocida: " << accion << endl;
-                break;
+        else {
+            cout << " Accion desconocida: " << accion << endl;
         }
     }
-    
+
     eliminarCliente(nickname);
-    broadcastMensaje('B', "Sistema", nickname + " ha salido del chat.", socketFD);
-    close(socketFD);
+    shutdown(S, SHUT_RDWR);
+    close(S);
 }
 
 
 int main(void) {
     struct sockaddr_in stSockAddr;
-    int SocketFD = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-    
-    if(-1 == SocketFD) {
+    int ServerSocket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+    if (-1 == ServerSocket) {
         perror("can not create socket");
         exit(EXIT_FAILURE);
     }
-    
+
     int opt = 1;
-    setsockopt(SocketFD, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    
+    setsockopt(ServerSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
     memset(&stSockAddr, 0, sizeof(struct sockaddr_in));
     stSockAddr.sin_family = AF_INET;
     stSockAddr.sin_port = htons(1100);
     stSockAddr.sin_addr.s_addr = INADDR_ANY;
-    
-    if(-1 == bind(SocketFD, (const struct sockaddr *)&stSockAddr, 
-                  sizeof(struct sockaddr_in))) {
+
+    if (-1 == bind(ServerSocket, (const struct sockaddr *)&stSockAddr, 
+                   sizeof(struct sockaddr_in))) {
         perror("error bind failed");
-        close(SocketFD);
+        close(ServerSocket);
         exit(EXIT_FAILURE);
     }
-    
-    if(-1 == listen(SocketFD, 10)) {
+
+    if (-1 == listen(ServerSocket, 10)) {
         perror("error listen failed");
-        close(SocketFD);
+        close(ServerSocket);
         exit(EXIT_FAILURE);
     }
-    
-    cout << "[+] Servidor iniciado en puerto 1100" << endl;
-    cout << "[+] Protocolo: " << TAMANIO_TOTAL << " bytes por mensaje" << endl;
-    cout << "[+] Esperando clientes..." << endl;
-    
-    vector<thread> threads;
-    
-    for(;;) {
-        int ConnectFD = accept(SocketFD, NULL, NULL);
-        if(0 > ConnectFD) {
+
+    cout << " Esperando clientes..." << endl;
+
+    for (;;) {
+        int ClientSocket = accept(ServerSocket, NULL, NULL);
+        if (0 > ClientSocket) {
             perror("error accept failed");
             continue;
         }
-        threads.emplace_back(manejarCliente, ConnectFD);
-        threads.back().detach();
+        thread(manejarCliente, ClientSocket).detach();
     }
-    
-    close(SocketFD);
+
+    close(ServerSocket);
     return 0;
 }

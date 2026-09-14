@@ -14,100 +14,121 @@
 
 using namespace std;
 
-#define TAMANIO_ACCION 1
-#define TAMANIO_NICKNAME 7
-#define TAMANIO_MENSAJE 11
-#define TAMANIO_TOTAL (TAMANIO_ACCION + TAMANIO_NICKNAME + TAMANIO_MENSAJE)
+#define TAMANIO_ACCION   1
+#define TAMANIO_DE_NOMBRE 7
+#define TAMANIO_DE_MSG  11
 
 atomic<bool> conectado(true);
 string miNickname;
 
-void empaquetarMensaje(char* buffer, char accion, const string& nickname, const string& mensaje) {
-    bzero(buffer, TAMANIO_TOTAL);
-    buffer[0] = accion;
-    strncpy(buffer + 1, nickname.c_str(), TAMANIO_NICKNAME);
-    strncpy(buffer + 1 + TAMANIO_NICKNAME, mensaje.c_str(), TAMANIO_MENSAJE);
+string zeroPad(int numero, int tamano) {
+    string str = to_string(numero);
+    if (str.length() >= (size_t)tamano)
+        return str;
+    return string(tamano - str.length(), '0') + str;
 }
 
-void desempaquetarMensaje(const char* buffer, char& accion,string& nickname, string& mensaje) {
-    accion = buffer[0];
-    char nick[TAMANIO_NICKNAME + 1] = {0};
-    strncpy(nick, buffer + 1, TAMANIO_NICKNAME);
-    nickname = string(nick);
-    nickname.erase(nickname.find_last_not_of(' ') + 1);
-    
-    char msg[TAMANIO_MENSAJE + 1] = {0};
-    strncpy(msg, buffer + 1 + TAMANIO_NICKNAME, TAMANIO_MENSAJE);
-    mensaje = string(msg);
-    mensaje.erase(mensaje.find_last_not_of(' ') + 1);
+string empaquetar(char accion, const string& nick, const string& msg) {
+    string data;
+    data += accion;
+    data += zeroPad(nick.size(), TAMANIO_DE_NOMBRE);
+    data += nick;
+    data += zeroPad(msg.size(), TAMANIO_DE_MSG);
+    data += msg;
+    return data;
 }
 
-void enviarMensaje(int socket, char accion, const string& nickname, const string& mensaje) {
-    char buffer[TAMANIO_TOTAL];
-    empaquetarMensaje(buffer, accion, nickname, mensaje);
-    write(socket, buffer, TAMANIO_TOTAL);
+void enviarMensaje(int S, char accion, const string& nick, const string& msg) {
+    string data = empaquetar(accion, nick, msg);
+    write(S, data.c_str(), data.size());
 }
 
-bool recibirMensaje(int socket, char& accion,string& nickname, string& mensaje) {
-    char buffer[TAMANIO_TOTAL];
-    bzero(buffer, TAMANIO_TOTAL);
-    int n = read(socket, buffer, TAMANIO_TOTAL);
+bool recibirMensaje(int S, char& accion, string& nick, string& msg) {
+    char buff[1000];
+    int n, tamano;
+
+    n = read(S, buff, 1);
     if (n <= 0) return false;
-    desempaquetarMensaje(buffer, accion, nickname, mensaje);
+    accion = buff[0];
+
+    n = read(S, buff, TAMANIO_DE_NOMBRE);
+    if (n <= 0) return false;
+    buff[n] = '\0';
+    tamano = atoi(buff);
+
+    n = read(S, buff, tamano);
+    if (n <= 0) return false;
+    buff[n] = '\0';
+    nick = buff;
+
+    n = read(S, buff, TAMANIO_DE_MSG);
+    if (n <= 0) return false;
+    buff[n] = '\0';
+    tamano = atoi(buff);
+
+    if (tamano > 0) {                    
+        n = read(S, buff, tamano);
+        if (n <= 0) return false;
+        buff[n] = '\0';
+        msg = buff;
+    } else {
+        msg = "";
+    }
+
     return true;
 }
 
-
-void recibirMensajes(int socketFD) {
+void recibirMensajes(int S) {
     char accion;
-    string nickname, mensaje;
-    
-    while(conectado) {
-        if (!recibirMensaje(socketFD, accion, nickname, mensaje)) {
-            cout << "\n[!] Desconectado del servidor" << endl;
+    string nick, msg;
+
+    while (conectado) {
+        if (!recibirMensaje(S, accion, nick, msg)) {
+            cout << "\n Desconectado del servidor" << endl;
             conectado = false;
             break;
         }
-        
-        if (accion == 'B') {
-            cout << "\r\n" << nickname << ": " << mensaje << endl;
-        } else if (accion == 'M') {
-            cout << "\r\n[" << nickname << "] " << mensaje << endl;
-        } else {
-            cout << "\r\n[Sistema] " << mensaje << endl;
+
+        if (accion == 'b') {
+            cout << "\r\n" << nick << ": " << msg << endl;
+            cout << "> " << flush;
         }
-        cout << "> " << flush;
+        else if (accion == 'm') {
+            cout << "\r\n[Privado de " << nick << "]: " << msg << endl;
+            cout << "> " << flush;
+        }
     }
 }
 
-void enviarMensajes(int socketFD) {
+void enviarMensajes(int S) {
     string input;
-    
-    while(conectado) {
+
+    while (conectado) {
         cout << "> ";
         getline(cin, input);
-        
+
         if (!conectado) break;
-        
-        if (input == "/quit" || input == "salir") {
-            enviarMensaje(socketFD, 'Q', miNickname, "Cerrando...");
+
+        if (input == "salir" || input == "/quit") {
+            enviarMensaje(S, 'Q', miNickname, "");
             conectado = false;
             break;
         }
-        
+
         if (input.empty()) continue;
-        
+
         if (input[0] == '@') {
             size_t pos = input.find(' ');
             if (pos != string::npos) {
                 string destino = input.substr(1, pos - 1);
-                string mensaje = input.substr(pos + 1);
-                enviarMensaje(socketFD, 'M', miNickname, 
-                              "@" + destino + " " + mensaje);
+                string texto = input.substr(pos + 1);
+                enviarMensaje(S, 'M', miNickname, "@" + destino + " " + texto);
+            } else {
+                cout << "[!] Formato: @nickname mensaje" << endl;
             }
-        } else {
-            
-            enviarMensaje(socketFD, 'M', miNickname, input);
+        }
+        else {
+            enviarMensaje(S, 'B', miNickname, input);
         }
     }
 }
@@ -115,6 +136,7 @@ void enviarMensajes(int socketFD) {
 
 int main(void) {
     struct sockaddr_in stSockAddr;
+    int Res;
     int SocketFD = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 
     if (-1 == SocketFD) {
@@ -126,8 +148,15 @@ int main(void) {
     stSockAddr.sin_family = AF_INET;
     stSockAddr.sin_port = htons(1100);
 
-    if (inet_pton(AF_INET, "127.0.0.1", &stSockAddr.sin_addr) <= 0) {
-        perror("invalid address");
+    Res = inet_pton(AF_INET, "127.0.0.1", &stSockAddr.sin_addr);
+
+    if (0 > Res) {
+        perror("error: first parameter is not a valid address family");
+        close(SocketFD);
+        exit(EXIT_FAILURE);
+    }
+    else if (0 == Res) {
+        perror("invalid IP address");
         close(SocketFD);
         exit(EXIT_FAILURE);
     }
@@ -139,17 +168,18 @@ int main(void) {
         exit(EXIT_FAILURE);
     }
 
-    cout << "Ingresa tu nickname (max 7 caracteres): ";
+    cout << "Ingresa tu NOMBRE: ";
     getline(cin, miNickname);
-    if (miNickname.length() > TAMANIO_NICKNAME) {
-        miNickname = miNickname.substr(0, TAMANIO_NICKNAME);
+
+    if (miNickname.empty()) {
+        cout << " El nombre no puede estar vacio" << endl;
+        close(SocketFD);
+        return 1;
     }
 
-    enviarMensaje(SocketFD, 'N', miNickname, "Conectando...");
-    
-    cout << "[!] Conectado como: " << miNickname << endl;
-    cout << "[!] Comandos: /quit para salir, @nick mensaje para privado" << endl;
-    cout << "=====================================" << endl;
+    enviarMensaje(SocketFD, 'N', miNickname, "");
+
+    cout << " Conectado como: " << miNickname << endl;
 
     thread hiloRecibir(recibirMensajes, SocketFD);
     thread hiloEnviar(enviarMensajes, SocketFD);
