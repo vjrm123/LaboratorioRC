@@ -1,4 +1,3 @@
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -11,6 +10,8 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <fstream>
+#include <iterator>
 
 using namespace std;
 
@@ -44,7 +45,7 @@ void enviarMensaje(int S, char accion, const string& nick, const string& msg) {
 }
 
 bool recibirMensaje(int S, char& accion, string& nick, string& msg) {
-    char buff[1000];
+    char buff[100000];
     int n, tamano;
 
     n = read(S, buff, 1);
@@ -93,7 +94,33 @@ void recibirMensajes(int S) {
             cout << "\r\n[Privado de " << nick << "]: " << msg << endl;
             cout << "> " << flush;
         }
-        
+        else if (accion == 'l') {
+            cout << "\r\n[LISTA] " << msg << endl;
+            cout << "> " << flush;
+        }
+        else if (accion == 'f') {
+            size_t p = msg.find('|');
+            if (p != string::npos) {
+                string filename = msg.substr(0, p);
+                string contenido = msg.substr(p + 1);
+
+                string ruta = "recibido_" + filename;
+                ofstream archivo(ruta, ios::binary);
+                if (archivo.is_open()) {
+                    archivo.write(contenido.c_str(), contenido.size());
+                    archivo.close();
+                    cout << "\r\n[Archivo de " << nick << "]: " 
+                         << filename << " → " << ruta << endl;
+                } else {
+                    cout << "\r\n[Error] No se pudo guardar archivo" << endl;
+                }
+                cout << "> " << flush;
+            }
+        }
+        else if (accion == 'e') {
+            cout << "\r\n[ERROR] " << msg << endl;
+            cout << "> " << flush;
+        }
     }
 }
 
@@ -114,6 +141,47 @@ void enviarMensajes(int S) {
 
         if (input.empty()) continue;
 
+        // ← NUEVO: Lista de conectados
+        if (input == "/lista" || input == "/users") {
+            enviarMensaje(S, 'L', miNickname, "");
+            continue;
+        }
+
+        // ← NUEVO: Enviar archivo
+        if (input.substr(0, 6) == "/file ") {
+            string resto = input.substr(6);
+            size_t pos = resto.find(' ');
+            if (pos == string::npos) {
+                cout << "Formato: /file destino ruta_archivo" << endl;
+                continue;
+            }
+            string destino = resto.substr(0, pos);
+            string ruta = resto.substr(pos + 1);
+
+            ifstream archivo(ruta, ios::binary);
+            if (!archivo.is_open()) {
+                cout << "No se pudo abrir: " << ruta << endl;
+                continue;
+            }
+
+            string contenido((istreambuf_iterator<char>(archivo)),
+                             istreambuf_iterator<char>());
+            archivo.close();
+
+            // Extraer solo el nombre del archivo (sin ruta)
+            string filename = ruta;
+            size_t barra = ruta.find_last_of('/');
+            if (barra != string::npos)
+                filename = ruta.substr(barra + 1);
+
+            // Enviar: "destino|filename|contenido"
+            string mensaje = destino + "|" + filename + "|" + contenido;
+            enviarMensaje(S, 'F', miNickname, mensaje);
+            cout << "Archivo '" << filename << "' enviado a " 
+                 << destino << " (" << contenido.size() << " bytes)" << endl;
+            continue;
+        }
+
         if (input[0] == '@') {
             size_t pos = input.find(' ');
             if (pos != string::npos) {
@@ -121,7 +189,7 @@ void enviarMensajes(int S) {
                 string texto = input.substr(pos + 1);
                 enviarMensaje(S, 'M', miNickname, "@" + destino + " " + texto);
             } else {
-                cout << " Formato: @nickname mensaje" << endl;
+                cout << "Formato: @nickname mensaje" << endl;
             }
         }
         else {

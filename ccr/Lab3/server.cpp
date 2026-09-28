@@ -88,12 +88,25 @@ void broadcastMensaje(const string& nick, const string& msg, int emisorSocket) {
     }
 }
 
-void enviarPrivado(const string& destino, const string& nick, const string& msg) {
+bool enviarArchivo(const string& destino, const string& nick, const string& filename, const string& contenido) {
+    lock_guard<mutex> lock(mtxLista);
+    auto it = ListOfCli.find(destino);
+    if (it != ListOfCli.end()) {
+        string dataFile = filename + "|" + contenido;
+        enviarMensaje(it->second, 'f', nick, dataFile);
+        return true;
+    }
+    return false;
+}
+
+bool enviarPrivado(const string& destino, const string& nick, const string& msg) {
     lock_guard<mutex> lock(mtxLista);
     auto it = ListOfCli.find(destino);
     if (it != ListOfCli.end()) {
         enviarMensaje(it->second, 'm', nick, msg);
+        return true;
     }
+    return false;   
 }
 
 void eliminarCliente(const string& nick) {
@@ -135,13 +148,50 @@ void manejarCliente(int S) {
                     string destino = msg.substr(1, pos - 1);
                     string texto = msg.substr(pos + 1);
                     cout << nickname << " -> @" << destino << ": " << texto << endl;
-                    enviarPrivado(destino, nickname, texto);
+
+                    // ← NUEVO: Error si no existe
+                    if (!enviarPrivado(destino, nickname, texto)) {
+                        enviarMensaje(S, 'e', "Sistema", 
+                                    "Usuario '" + destino + "' no existe");
+                    }
                 }
             }
         }
         else if (accion == 'B') {
             cout << nickname << ": " << msg << endl;
             broadcastMensaje(nickname, msg, S);
+        }
+        // ← NUEVO: Lista de conectados
+        else if (accion == 'L') {
+            string lista = "Conectados (" + to_string(ListOfCli.size()) + "): ";
+            {
+                lock_guard<mutex> lock(mtxLista);
+                for (auto& c : ListOfCli) {
+                    lista += c.first + " ";
+                }
+            }
+            enviarMensaje(S, 'l', "Sistema", lista);
+        }
+        // ← NUEVO: Archivo
+        else if (accion == 'F') {
+            // msg = "destino|filename|contenido"
+            size_t p1 = msg.find('|');
+            size_t p2 = msg.find('|', p1 + 1);
+            if (p1 != string::npos && p2 != string::npos) {
+                string destino   = msg.substr(0, p1);
+                string filename  = msg.substr(p1 + 1, p2 - p1 - 1);
+                string contenido = msg.substr(p2 + 1);
+
+                cout << nickname << " envia archivo '" << filename 
+                    << "' a " << destino 
+                    << " (" << contenido.size() << " bytes)" << endl;
+
+                // ← Error si no existe
+                if (!enviarArchivo(destino, nickname, filename, contenido)) {
+                    enviarMensaje(S, 'e', "Sistema", 
+                                "Usuario '" + destino + "' no existe");
+                }
+            }
         }
         else if (accion == 'Q') {
             cout << " " << nickname << " desconectado" << endl;
