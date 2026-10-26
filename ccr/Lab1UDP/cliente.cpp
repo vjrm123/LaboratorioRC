@@ -14,15 +14,14 @@
 
 using namespace std;
 
-#define TAMANIO_ACCION   1
-#define TAMANIO_DE_NOMBRE 7
-#define TAMANIO_DE_MSG  11
+#define TAM_PAQUETE 100
+#define TAM_NICK    7
+#define TAM_MSG     11
 
 atomic<bool> conectado(true);
 string miNickname;
 int SocketFD;
 struct sockaddr_in server_addr;
-
 
 string zeroPad(int numero, int tamano) {
     string str = to_string(numero);
@@ -31,36 +30,55 @@ string zeroPad(int numero, int tamano) {
 }
 
 string empaquetar(char accion, const string& nick, const string& msg) {
-    string data;
-    data += accion;
-    data += zeroPad(nick.size(), TAMANIO_DE_NOMBRE);
-    data += nick;
-    data += zeroPad(msg.size(), TAMANIO_DE_MSG);
-    data += msg;
-    return data;
+    char buffer[TAM_PAQUETE];
+    memset(buffer, 0, TAM_PAQUETE);
+
+    int offset = 0;
+    buffer[offset] = accion;
+    offset += 1;
+
+    int nickLen = nick.size();
+    int msgLen = msg.size();
+    
+    if (nickLen + msgLen > 81) {
+        if (nickLen > 81) { nickLen = 81; msgLen = 0; }
+        else { msgLen = 81 - nickLen; }
+    }
+
+    string szNick = zeroPad(nickLen, TAM_NICK);
+    memcpy(buffer + offset, szNick.c_str(), TAM_NICK);
+    offset += TAM_NICK;
+
+    memcpy(buffer + offset, nick.c_str(), nickLen);
+    offset += nickLen;
+
+    string szMsg = zeroPad(msgLen, TAM_MSG);
+    memcpy(buffer + offset, szMsg.c_str(), TAM_MSG);
+    offset += TAM_MSG;
+
+    memcpy(buffer + offset, msg.c_str(), msgLen);
+
+    return string(buffer, TAM_PAQUETE);
 }
 
 void desempaquetar(const char* buffer, int totalBytes, char& accion, string& nick, string& msg) {
+    if (totalBytes != TAM_PAQUETE) return;
+
     int offset = 0;
-    if (offset >= totalBytes) return;
     accion = buffer[offset];
     offset += 1;
 
-    if (offset + TAMANIO_DE_NOMBRE > totalBytes) return;
-    string strTamNick(buffer + offset, TAMANIO_DE_NOMBRE);
-    offset += TAMANIO_DE_NOMBRE;
+    string strTamNick(buffer + offset, TAM_NICK);
+    offset += TAM_NICK;
     int tamNick = atoi(strTamNick.c_str());
 
-    if (offset + tamNick > totalBytes) return;
     nick = string(buffer + offset, tamNick);
     offset += tamNick;
 
-    if (offset + TAMANIO_DE_MSG > totalBytes) return;
-    string strTamMsg(buffer + offset, TAMANIO_DE_MSG);
-    offset += TAMANIO_DE_MSG;
+    string strTamMsg(buffer + offset, TAM_MSG);
+    offset += TAM_MSG;
     int tamMsg = atoi(strTamMsg.c_str());
 
-    if (offset + tamMsg > totalBytes) return;
     msg = string(buffer + offset, tamMsg);
 }
 
@@ -71,27 +89,26 @@ void enviarMensaje(int S, char accion, const string& nick, const string& msg) {
 }
 
 bool recibirMensaje(int S, char& accion, string& nick, string& msg) {
-    char buffer[1024];
+    char buffer[TAM_PAQUETE];
     socklen_t len = sizeof(server_addr);
     
     accion = '\0';
     nick.clear();
     msg.clear();
 
-    int n = recvfrom(S, buffer, sizeof(buffer), 0, (struct sockaddr *)&server_addr, &len);
+    int n = recvfrom(S, buffer, TAM_PAQUETE, 0, (struct sockaddr *)&server_addr, &len);
     
     if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return true; 
-        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return true; // Timeout
         return false;
     }
     if (n == 0) return false;
 
-    desempaquetar(buffer, n, accion, nick, msg);
+    if (n == TAM_PAQUETE) {
+        desempaquetar(buffer, n, accion, nick, msg);
+    }
     return true;
 }
-
 
 void recibirMensajes(int S) {
     char accion;
@@ -103,8 +120,8 @@ void recibirMensajes(int S) {
             conectado = false;
             break;
         }
-
-        if (nick.empty() && msg.empty()) continue; 
+        
+        if (nick.empty() && msg.empty()) continue;
 
         if (accion == 'b') {
             cout << "\r\n" << nick << ": " << msg << endl;
@@ -115,7 +132,7 @@ void recibirMensajes(int S) {
             cout << "> " << flush;
         }
         else if (accion == 'l') {
-            cout << "\r\n[LISTA] " << msg << ", "<< endl;
+            cout << "\r\n[LISTA] " << msg << endl;
             cout << "> " << flush;
         }
     }
@@ -187,7 +204,7 @@ int main(void) {
     }
 
     enviarMensaje(SocketFD, 'N', miNickname, "");
-    cout << " Conectado como: " << miNickname << " (UDP)" << endl;
+    cout << "servidor UDP" << endl;
 
     thread hiloRecibir(recibirMensajes, SocketFD);
     thread hiloEnviar(enviarMensajes, SocketFD);
