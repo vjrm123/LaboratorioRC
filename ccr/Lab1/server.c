@@ -10,11 +10,13 @@
 #include <unistd.h>
 #include <iostream>
 #include <string>
+#include <thread>
 
 using namespace std;
 
-int main(void)
-{
+
+
+int main(void) {
     struct sockaddr_in stSockAddr;
     int SocketFD = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
     char buffer[256];
@@ -31,7 +33,7 @@ int main(void)
     memset(&stSockAddr, 0, sizeof(struct sockaddr_in));
 
     stSockAddr.sin_family = AF_INET;
-    stSockAddr.sin_port = htons(1100);
+    stSockAddr.sin_port = htons(45000);
     stSockAddr.sin_addr.s_addr = INADDR_ANY;
 
     if(-1 == bind(SocketFD,

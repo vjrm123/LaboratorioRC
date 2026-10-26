@@ -10,6 +10,7 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include <fstream>
 #include <iterator>
 
@@ -21,6 +22,35 @@ using namespace std;
 
 atomic<bool> conectado(true);
 string miNickname;
+mutex mutexTraza;
+
+void imprimirTraza(const string& direccion, char accion, const string& nick, const string& msg) {
+    lock_guard<mutex> lock(mutexTraza);
+    cout << "\n[" << direccion << "] accion=" << accion << " nick=" << nick;
+
+    if (accion == 'F') {
+        size_t p1 = msg.find('|');
+        size_t p2 = p1 == string::npos ? string::npos : msg.find('|', p1 + 1);
+        if (p1 != string::npos && p2 != string::npos) {
+            cout << " destino=" << msg.substr(0, p1)
+                 << " archivo=" << msg.substr(p1 + 1, p2 - p1 - 1)
+                 << " bytes=" << msg.size() - p2 - 1;
+        } else {
+            cout << " mensaje=" << msg;
+        }
+    } else if (accion == 'f') {
+        size_t p = msg.find('|');
+        if (p != string::npos) {
+            cout << " archivo=" << msg.substr(0, p)
+                 << " bytes=" << msg.size() - p - 1;
+        } else {
+            cout << " mensaje=" << msg;
+        }
+    } else {
+        cout << " mensaje=" << msg;
+    }
+    cout << endl;
+}
 
 string zeroPad(int numero, int tamano) {
     string str = to_string(numero);
@@ -41,7 +71,9 @@ string empaquetar(char accion, const string& nick, const string& msg) {
 
 void enviarMensaje(int S, char accion, const string& nick, const string& msg) {
     string data = empaquetar(accion, nick, msg);
-    write(S, data.c_str(), data.size());
+    if (write(S, data.c_str(), data.size()) > 0) {
+        imprimirTraza("ENVIADO", accion, nick, msg);
+    }
 }
 
 bool recibirMensaje(int S, char& accion, string& nick, string& msg) {
@@ -72,6 +104,7 @@ bool recibirMensaje(int S, char& accion, string& nick, string& msg) {
     buff[n] = '\0';
     msg = buff;
 
+    imprimirTraza("RECIBIDO", accion, nick, msg);
     return true;
 }
 
